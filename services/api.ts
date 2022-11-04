@@ -1,28 +1,31 @@
 import axios, { AxiosError } from 'axios';
 import { parseCookies, setCookie } from 'nookies';
 import { signOut } from '../contexts/AuthContext';
+import { AuthTokenError } from './errors/AuthTokenError';
 
 interface AxiosErrorResponse {
   code?: string;
 }
 
-let cookies = parseCookies()
 let isRefreshing = false
 let failedRequestQueue = []
 
-export const api = axios.create({
-  baseURL: 'http://localhost:3333',
-  headers: {
-    Authorization: `Bearer ${cookies['nextauth.token']}`
-  }
-})
+export function setupAPIClient(ctx = undefined) {
+  let cookies = parseCookies(ctx)
+  
+  const api = axios.create({
+    baseURL: 'http://localhost:3333',
+    headers: {
+      Authorization: `Bearer ${cookies['nextauth.token']}`
+    }
+  })
 
-api.interceptors.response.use(response => {
-  return response
-}, (error: AxiosError<AxiosErrorResponse>) => {
+  api.interceptors.response.use(response => {
+    return response
+  }, (error: AxiosError<AxiosErrorResponse>) => {
   if(error.response.status === 401) {
     if(error.response.data?.code === 'token.expired'){
-      cookies = parseCookies(); //atualiza cookies
+      cookies = parseCookies(ctx); //atualiza cookies
       
       //renovar o token
       const { 'nextauth.refreshToken': refreshToken } = cookies
@@ -36,12 +39,12 @@ api.interceptors.response.use(response => {
         }).then(response => {
           const { token } = response.data
   
-          setCookie(undefined, 'nextauth.token', token, {
+          setCookie(ctx, 'nextauth.token', token, {
             maxAge: 60 * 60 * 24 * 30, // 30 days
             path: '/' // quais caminhos vão ter acesso a esse cookie. "/" <== qualquer caminho tem acesso
           })
     
-          setCookie(undefined, 'nextauth.refreshToken', response.data.refreshToken, {
+          setCookie(ctx, 'nextauth.refreshToken', response.data.refreshToken, {
             maxAge: 60 * 60 * 24 * 30, // 30 days
             path: '/' // quais caminhos vão ter acesso a esse cookie. "/" <== qualquer caminho tem acesso
           })
@@ -53,6 +56,12 @@ api.interceptors.response.use(response => {
         }).catch(err => {
           failedRequestQueue.forEach(request => request.onFailure(err))
           failedRequestQueue = []
+
+          if(typeof window !== 'undefined') {
+            signOut()
+          }else {
+            return Promise.reject(new AuthTokenError())
+          }
         }).finally(() => {
           isRefreshing = false
         })
@@ -71,9 +80,16 @@ api.interceptors.response.use(response => {
         })
       })
     }else {
-      signOut()
+      if(typeof window !== 'undefined') {
+        signOut()
+      } else {
+        return Promise.reject(new AuthTokenError())
+      }
     }
   }
 
   return Promise.reject(error)
 })
+
+ return api
+}
